@@ -1,0 +1,442 @@
+// This is your Prisma schema file for Thrift Savings Platform (Ajo/Esusu)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER MANAGEMENT ====================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  phone         String?
+  name          String
+  avatar        String?
+  password      String
+  role          UserRole  @default(MEMBER)
+  isActive      Boolean   @default(true)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  ownedGroups       Group[]             @relation("GroupOwner")
+  administratedGroups Group[]           @relation("GroupAdmin")
+  memberships       GroupMember[]
+  contributions     Contribution[]
+  payouts           Payout[]
+  proofs            ProofOfPayment[]
+  penalties         Penalty[]
+  notifications     Notification[]
+  sessions          Session[]
+  accounts          Account[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+enum UserRole {
+  SUPER_ADMIN  // Platform admin
+  GROUP_ADMIN  // Group administrator
+  MEMBER       // Regular member
+}
+
+// ==================== GROUP MANAGEMENT ====================
+
+model Group {
+  id                String        @id @default(cuid())
+  name              String
+  description       String?
+  logo              String?
+  contributionType  ContributionType
+  contributionAmount Float        // Amount per contribution
+  currency          String        @default("NGN")
+  
+  // Cycle settings
+  cycleDuration     Int           // Duration in days/weeks depending on type
+  maxMembers        Int           // Maximum number of positions
+  startDate         DateTime
+  endDate           DateTime?
+  currentCycle      Int           @default(1)
+  totalCycles       Int           // Total number of cycles
+  
+  // Penalty settings
+  penaltyType       PenaltyType?
+  penaltyValue      Float?        // Percentage or fixed amount
+  penaltyGracePeriod Int?         @default(0) // Grace period in days
+  
+  // Charge settings (platform/admin fees)
+  chargeType        ChargeType?
+  chargeValue       Float?        // Percentage or fixed amount per payout
+  
+  // Group settings
+  isPrivate         Boolean       @default(false)
+  inviteCode        String?       @unique
+  status            GroupStatus   @default(PENDING)
+  
+  // Payout method
+  payoutOrder       PayoutOrder   @default(FIXED) // How payout positions are determined
+  
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  // Relations
+  ownerId           String
+  owner             User          @relation("GroupOwner", fields: [ownerId], references: [id])
+  adminId           String?
+  admin             User?         @relation("GroupAdmin", fields: [adminId], references: [id])
+  members           GroupMember[]
+  cycles            Cycle[]
+  contributions     Contribution[]
+  payouts           Payout[]
+  penalties         Penalty[]
+
+  @@index([ownerId])
+  @@index([adminId])
+  @@index([status])
+  @@index([inviteCode])
+}
+
+enum ContributionType {
+  WEEKLY
+  MONTHLY
+}
+
+enum GroupStatus {
+  PENDING    // Group created but not started
+  ACTIVE     // Group is active and collecting contributions
+  PAUSED     // Group is temporarily paused
+  COMPLETED  // Group has completed all cycles
+  CANCELLED  // Group was cancelled
+}
+
+enum PenaltyType {
+  PERCENTAGE
+  FIXED
+}
+
+enum ChargeType {
+  PERCENTAGE
+  FIXED
+}
+
+enum PayoutOrder {
+  FIXED      // Positions are fixed when member joins
+  RANDOM     // Random draw at start
+  PRIORITY   // Based on member preference/seniority
+  VOTING     // Members vote on positions
+}
+
+// ==================== GROUP MEMBERSHIP ====================
+
+model GroupMember {
+  id              String        @id @default(cuid())
+  groupId         String
+  userId          String
+  position        Int           // Payout position (1 = first to receive)
+  positions       Int           @default(1) // Number of positions held
+  totalContribution Float       @default(0) // Running total
+  status          MemberStatus  @default(ACTIVE)
+  joinedAt        DateTime      @default(now())
+  
+  // Bank details for payout
+  bankName        String?
+  bankAccountNumber String?
+  bankAccountName   String?
+  
+  group           Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId, position])
+  @@index([groupId])
+  @@index([userId])
+  @@index([position])
+}
+
+enum MemberStatus {
+  ACTIVE
+  SUSPENDED
+  REMOVED
+  COMPLETED
+}
+
+// ==================== CYCLE MANAGEMENT ====================
+
+model Cycle {
+  id              String      @id @default(cuid())
+  groupId         String
+  cycleNumber     Int
+  startDate       DateTime
+  endDate         DateTime
+  expectedAmount  Float       // Expected total contribution
+  collectedAmount Float       @default(0)
+  status          CycleStatus @default(PENDING)
+  payoutDate      DateTime?
+  completedAt     DateTime?
+  
+  group           Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  contributions   Contribution[]
+  payouts         Payout[]
+
+  @@unique([groupId, cycleNumber])
+  @@index([groupId])
+  @@index([status])
+}
+
+enum CycleStatus {
+  PENDING     // Cycle not yet started
+  ACTIVE      // Currently collecting contributions
+  PROCESSING  // Processing payouts
+  COMPLETED   // Cycle completed
+}
+
+// ==================== CONTRIBUTIONS ====================
+
+model Contribution {
+  id              String            @id @default(cuid())
+  groupId         String
+  cycleId         String
+  userId          String
+  memberPosition  Int               // Which position this contribution is for
+  amount          Float
+  expectedDate    DateTime          // When contribution was expected
+  paidDate        DateTime?         // When actually paid
+  status          ContributionStatus @default(PENDING)
+  
+  // For tracking partial payments
+  isPartial       Boolean           @default(false)
+  partialAmount   Float?
+  
+  group           Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cycle           Cycle             @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  proofs          ProofOfPayment[]
+  penalties       Penalty[]
+
+  @@index([groupId])
+  @@index([cycleId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum ContributionStatus {
+  PENDING     // Waiting for payment
+  PROCESSING  // Proof uploaded, awaiting confirmation
+  CONFIRMED   // Payment confirmed
+  REJECTED    // Payment rejected
+  LATE        // Payment was late
+  DEFAULTED   // Member failed to pay
+}
+
+// ==================== PROOF OF PAYMENT ====================
+
+model ProofOfPayment {
+  id              String        @id @default(cuid())
+  contributionId  String
+  userId          String
+  imageUrl        String        // URL to uploaded image/document
+  referenceNumber String?       // Payment reference
+  notes           String?       // Additional notes from member
+  uploadedAt      DateTime      @default(now())
+  
+  // Admin verification
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  reviewNotes     String?
+  status          ProofStatus   @default(PENDING)
+  
+  contribution    Contribution  @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([contributionId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum ProofStatus {
+  PENDING     // Awaiting review
+  APPROVED    // Proof approved
+  REJECTED    // Proof rejected
+}
+
+// ==================== PAYOUTS ====================
+
+model Payout {
+  id              String        @id @default(cuid())
+  groupId         String
+  cycleId         String
+  userId          String
+  memberPosition  Int
+  amount          Float         // Total payout amount
+  deductions      Float         @default(0) // Penalties, charges deducted
+  netAmount       Float         // Amount after deductions
+  
+  // Bank details snapshot
+  bankName        String?
+  bankAccountNumber String?
+  bankAccountName   String?
+  
+  status          PayoutStatus  @default(PENDING)
+  processedAt     DateTime?
+  processedBy     String?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  
+  group           Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cycle           Cycle         @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, cycleId, memberPosition])
+  @@index([groupId])
+  @@index([cycleId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum PayoutStatus {
+  PENDING     // Payout pending
+  PROCESSING  // Being processed
+  COMPLETED   // Payout completed
+  FAILED      // Payout failed
+  CANCELLED   // Payout cancelled
+}
+
+// ==================== PENALTIES ====================
+
+model Penalty {
+  id              String        @id @default(cuid())
+  groupId         String
+  contributionId  String?
+  userId          String
+  type            PenaltyType
+  amount          Float
+  reason          String
+  status          PenaltyStatus @default(PENDING)
+  waivedAt        DateTime?
+  waivedBy        String?
+  waivedReason    String?
+  createdAt       DateTime      @default(now())
+  
+  group           Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  contribution    Contribution? @relation(fields: [contributionId], references: [id], onDelete: SetNull)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([groupId])
+  @@index([contributionId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum PenaltyStatus {
+  PENDING     // Penalty applied but not deducted
+  DEDUCTED    // Deducted from payout
+  WAIVED      // Penalty waived by admin
+}
+
+// ==================== NOTIFICATIONS ====================
+
+model Notification {
+  id          String              @id @default(cuid())
+  userId      String
+  title       String
+  message     String
+  type        NotificationType
+  data        String?             // JSON string for additional data
+  isRead      Boolean             @default(false)
+  readAt      DateTime?
+  createdAt   DateTime            @default(now())
+  
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+enum NotificationType {
+  CONTRIBUTION_DUE
+  CONTRIBUTION_REMINDER
+  CONTRIBUTION_CONFIRMED
+  CONTRIBUTION_REJECTED
+  PAYOUT_INCOMING
+  PAYOUT_COMPLETED
+  PENALTY_APPLIED
+  GROUP_UPDATE
+  CYCLE_START
+  CYCLE_END
+  MEMBER_JOINED
+  MEMBER_LEFT
+}
+
+// ==================== SYSTEM SETTINGS ====================
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+}
+
+// ==================== ACTIVITY LOG ====================
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  entityType  String
+  entityId    String
+  details     String?  // JSON string
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
