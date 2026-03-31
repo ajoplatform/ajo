@@ -123,6 +123,8 @@ prisma/
 - Successful creation returns `status: 201`; reads/updates return `200` (default).
 - Follow RESTful conventions: `GET` for reads, `POST` for creates, `PATCH` for updates, `DELETE` for deletes.
 
+- Name the response key after the resource (`{ user }`, `{ groups }`, `{ success, response }`).
+
 ```ts
 // Standard API handler pattern
 export async function GET(request: NextRequest) {
@@ -130,6 +132,7 @@ export async function GET(request: NextRequest) {
     // ...logic
     return NextResponse.json({ data });
   } catch (error) {
+    console.error('Failed to ...:', error);
     return NextResponse.json({ error: 'Failed to ...' }, { status: 500 });
   }
 }
@@ -142,7 +145,8 @@ export async function GET(request: NextRequest) {
 - **Prisma** with SQLite (`prisma/schema.prisma`). Use the singleton exported from `src/lib/db.ts` (`import { db } from '@/lib/db'`).
 - **PayloadCMS** uses a separate SQLite file (`db/payload.db`) via `@payloadcms/db-sqlite`.
 - After schema changes run `bun run db:generate` then `bun run db:push` (dev) or `bun run db:migrate` (production).
-- IDs use `cuid()` by default. Do not use `uuid` for Prisma models unless explicitly required.
+- IDs use `cuid()` by default. Do not use `uuid` for Prisma models unless explicitly required (`uuid` is available as a package for non-model use cases).
+- The Prisma singleton enables `log: ['query']` in development — be aware this produces verbose query logs.
 
 ---
 
@@ -152,6 +156,24 @@ export async function GET(request: NextRequest) {
 - AI endpoints live under `src/app/api/ai/`: `chat`, `asr`, `tts`, `vision`, `insights`.
 - Keep AI system prompts in the same file as the route handler, as named constants.
 - Always wrap ZAI calls in `try/catch`; return `{ success: false, error: string }` on failure.
+
+---
+
+## Key Libraries
+
+Prefer these installed packages over reimplementing from scratch:
+
+| Purpose | Package |
+|---|---|
+| Form handling | `react-hook-form` + `@hookform/resolvers` |
+| Schema validation | `zod` |
+| Global state | `zustand` |
+| Server state / data fetching | `@tanstack/react-query` |
+| Authentication | `next-auth` |
+| Internationalisation | `next-intl` (prefer translations over hard-coded strings) |
+| Drag and drop | `@dnd-kit/core`, `@dnd-kit/sortable` |
+| Charts | `recharts` |
+| Unique IDs (non-Prisma) | `uuid` |
 
 ---
 
@@ -171,5 +193,7 @@ Most strict rules are **disabled** (see `eslint.config.mjs`). Key relaxed rules:
 - `@typescript-eslint/no-unused-vars`: off
 - `react-hooks/exhaustive-deps`: off
 - `no-console`: off
+
+Many additional rules are also off (`prefer-const`, `no-debugger`, `no-empty`, `react/no-unescaped-entities`, `@next/next/no-img-element`, etc.). Check `eslint.config.mjs` before adding `eslint-disable` comments — the rule may already be disabled.
 
 Run `bun run lint` before submitting changes. Fix any errors that are not in the disabled list.
